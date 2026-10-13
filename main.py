@@ -729,7 +729,13 @@ if __name__ == "__main__":
     #    rather than raised — but do not lean on that; leave it unset.
     template_bot = FallTemplateBot2026(
         research_reports_per_question=1,
-        predictions_per_research_report=5,
+        # 2, not the template's 5. Measured on Test Bot run 38428825178:
+        # five gpt-5.5 forecast calls per question cost $0.63/question, which
+        # annualises to ₹1.67 lakh across MiniBench and the seasonal tournament
+        # against an expected mean prize income of ₹34,000 — 4.9x negative.
+        # Two keeps some of the variance reduction of aggregation at about half
+        # the cost. Raise it again only if a round shows we are near the top.
+        predictions_per_research_report=2,
         use_research_summary_to_forecast=False,
         publish_reports_to_metaculus=publish_to_metaculus,
         folder_to_save_reports_to=None,
