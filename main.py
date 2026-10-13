@@ -700,13 +700,25 @@ if __name__ == "__main__":
     args = parser.parse_args()
     run_mode: Literal["tournament", "metaculus_cup", "test_questions"] = args.mode
 
-    check_environment(strict=True)
+    # strict=False deliberately: this bot runs on Azure OpenAI, and
+    # check_environment only recognises OPENROUTER_API_KEY / OPENAI_API_KEY /
+    # ANTHROPIC_API_KEY (see .env.template). A missing or wrong Azure key still
+    # fails loudly on the first LLM call, so nothing is actually unguarded.
+    check_environment(strict=False)
     publish_to_metaculus = True
     print_startup_banner(run_mode, will_publish=publish_to_metaculus)
 
-    # Configure the bot. The `llms=` block below is commented out to use
-    # whichever default models forecasting-tools picks based on your env vars;
-    # uncomment and edit to pin specific models.
+    # Every role runs on our own Azure OpenAI (deployment `volume` =
+    # gpt-4o-mini-2024-07-18), because the commercial-bot rule forfeits the
+    # donated OpenRouter credits and we already pay for Azure.
+    #
+    # NOTE, and this cost an afternoon to find: do NOT point `default` at the
+    # `reason` or `deep` deployments (gpt-5.5 / gpt-5.6). litellm keys its
+    # parameter rules off the MODEL name, and an Azure deployment alias hides
+    # it — so litellm sends `max_tokens` and `temperature`, both of which a
+    # reasoning model refuses, and every call 400s. `litellm.drop_params = True`
+    # does not rescue it. To use gpt-5.5, deploy it under the deployment name
+    # `gpt-5.5` (a name litellm's model map knows) and drop `temperature`.
     template_bot = FallTemplateBot2026(
         research_reports_per_question=1,
         predictions_per_research_report=5,
@@ -715,24 +727,30 @@ if __name__ == "__main__":
         folder_to_save_reports_to=None,
         skip_previously_forecasted_questions=True,
         extra_metadata_in_explanation=True,
-        # llms={
-        #     "default": GeneralLlm(
-        #         model="openrouter/openai/gpt-4o",
-        #         temperature=0.3,
-        #         timeout=40,
-        #         allowed_tries=2,
-        #     ),
-        #     "summarizer": "openai/gpt-4o-mini",
-        #     "researcher": "asknews/news-summaries",
-        #     "parser": "openai/gpt-4o-mini",
-        # },
+        llms={
+            "default": GeneralLlm(
+                model="azure/volume",
+                temperature=0.3,
+                timeout=90,
+                allowed_tries=2,
+            ),
+            "summarizer": GeneralLlm(
+                model="azure/volume", temperature=0.0, timeout=60, allowed_tries=2
+            ),
+            "researcher": GeneralLlm(
+                model="azure/volume", temperature=0.0, timeout=90, allowed_tries=2
+            ),
+            "parser": GeneralLlm(
+                model="azure/volume", temperature=0.0, timeout=60, allowed_tries=2
+            ),
+        },
     )
 
     # Per-mode tournament URL shown in the summary banner footer. These
     # piggyback on the forecasting_tools SDK constants and need updating
     # whenever those rotate seasons.
     TOURNAMENT_URLS = {
-        "tournament": "https://www.metaculus.com/tournament/fall-futureeval-2026/",
+        "tournament": "https://www.metaculus.com/tournament/minibench/",
         "metaculus_cup": "https://www.metaculus.com/tournament/metaculus-cup-fall-2026/",
         "test_questions": "https://www.metaculus.com/tournament/bot-testing-area/",
     }
@@ -742,17 +760,16 @@ if __name__ == "__main__":
     # summary printers below.
     client = MetaculusClient()
     if run_mode == "tournament":
-        seasonal_tournament_reports = asyncio.run(
-            template_bot.forecast_on_tournament(
-                client.CURRENT_AI_COMPETITION_ID, return_exceptions=True
-            )
-        )
-        minibench_reports = asyncio.run(
+        # MiniBench ONLY, deliberately. A two-week round of ~60 questions is the
+        # cheapest honest read on whether this bot is any good, and it costs
+        # nothing to be wrong in. Re-add the seasonal tournament — restore the
+        # client.CURRENT_AI_COMPETITION_ID call here — once MiniBench puts us
+        # above the median of the bot field.
+        forecast_reports = asyncio.run(
             template_bot.forecast_on_tournament(
                 client.CURRENT_MINIBENCH_ID, return_exceptions=True
             )
         )
-        forecast_reports = seasonal_tournament_reports + minibench_reports
     elif run_mode == "metaculus_cup":
         # The Metaculus Cup may be uninitialized near the start of a season
         # (Jan/May/Sep). MetaculusClient.ACX_2025_TOURNAMENT = 32564 and
