@@ -708,17 +708,25 @@ if __name__ == "__main__":
     publish_to_metaculus = True
     print_startup_banner(run_mode, will_publish=publish_to_metaculus)
 
-    # Every role runs on our own Azure OpenAI (deployment `volume` =
-    # gpt-4o-mini-2024-07-18), because the commercial-bot rule forfeits the
-    # donated OpenRouter credits and we already pay for Azure.
+    # Every role runs on our own Azure OpenAI, because the commercial-bot rule
+    # forfeits the donated OpenRouter credits and we already pay for Azure.
+    # Reasoning on gpt-5.5; the cheap supporting roles on gpt-4o-mini.
     #
-    # NOTE, and this cost an afternoon to find: do NOT point `default` at the
-    # `reason` or `deep` deployments (gpt-5.5 / gpt-5.6). litellm keys its
-    # parameter rules off the MODEL name, and an Azure deployment alias hides
-    # it — so litellm sends `max_tokens` and `temperature`, both of which a
-    # reasoning model refuses, and every call 400s. `litellm.drop_params = True`
-    # does not rescue it. To use gpt-5.5, deploy it under the deployment name
-    # `gpt-5.5` (a name litellm's model map knows) and drop `temperature`.
+    # TWO THINGS HERE ARE LOAD-BEARING, both found the hard way:
+    #
+    # 1. The deployment MUST be named `gpt-5.5`, not an alias. litellm keys its
+    #    parameter rules off the MODEL name, and an Azure deployment alias hides
+    #    it: against our `reason` deployment (the same gpt-5.5 model) litellm
+    #    sends `max_tokens`, which a reasoning model refuses, and the call fails.
+    #    Verified on litellm 1.80.10, the version poetry.lock pins:
+    #      azure/gpt-5.5 + max_tokens  -> OK
+    #      azure/reason  + max_tokens  -> BadRequestError
+    #    Hence two deployments of the same model, deliberately.
+    # 2. `default` carries NO temperature. gpt-5 models accept only the default
+    #    of 1, and litellm 1.80.10 raises UnsupportedParamsError client-side if
+    #    you pass 0.3. forecasting-tools sets litellm.drop_params = True
+    #    globally (general_llm.py), so a stray temperature would be dropped
+    #    rather than raised — but do not lean on that; leave it unset.
     template_bot = FallTemplateBot2026(
         research_reports_per_question=1,
         predictions_per_research_report=5,
@@ -729,9 +737,8 @@ if __name__ == "__main__":
         extra_metadata_in_explanation=True,
         llms={
             "default": GeneralLlm(
-                model="azure/volume",
-                temperature=0.3,
-                timeout=90,
+                model="azure/gpt-5.5",
+                timeout=120,
                 allowed_tries=2,
             ),
             "summarizer": GeneralLlm(
